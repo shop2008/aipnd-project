@@ -4,7 +4,12 @@ from torch import nn, optim
 import torch.nn.functional as F
 from torchvision import datasets, transforms, models
 import os
-from torchvision.models import VGG16_Weights
+from torchvision.models import (
+    VGG16_Weights,
+    VGG13_Weights,
+    ResNet50_Weights,
+    DenseNet121_Weights,
+)
 
 
 def get_args():
@@ -14,7 +19,10 @@ def get_args():
         "--save_dir", default="checkpoints", help="Directory to save checkpoints"
     )
     parser.add_argument(
-        "--arch", default="vgg16", choices=["vgg13", "vgg16"], help="Model architecture"
+        "--arch",
+        default="vgg16",
+        choices=["vgg13", "vgg16", "resnet50", "densenet121"],
+        help="Model architecture",
     )
     parser.add_argument(
         "--learning_rate", type=float, default=0.001, help="Learning rate"
@@ -68,25 +76,48 @@ def load_data(data_dir):
 
 
 def build_model(arch, hidden_units):
+    # Dictionary to store input features for each architecture
+    input_features = {
+        "vgg16": 25088,
+        "vgg13": 25088,
+        "resnet50": 2048,
+        "densenet121": 1024,
+    }
+
+    # Initialize the model based on architecture
     if arch == "vgg16":
         model = models.vgg16(weights=VGG16_Weights.DEFAULT)
-    else:
+    elif arch == "vgg13":
         model = models.vgg13(weights=VGG13_Weights.DEFAULT)
+    elif arch == "resnet50":
+        model = models.resnet50(weights=ResNet50_Weights.DEFAULT)
+    elif arch == "densenet121":
+        model = models.densenet121(weights=DenseNet121_Weights.DEFAULT)
 
     # Freeze parameters
     for param in model.parameters():
         param.requires_grad = False
 
     # Define new classifier
-    classifier = nn.Sequential(
-        nn.Linear(25088, hidden_units),
-        nn.ReLU(),
-        nn.Dropout(0.5),
-        nn.Linear(hidden_units, 102),
-        nn.LogSoftmax(dim=1),
-    )
+    if arch.startswith("resnet"):
+        classifier = nn.Sequential(
+            nn.Linear(input_features[arch], hidden_units),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(hidden_units, 102),
+            nn.LogSoftmax(dim=1),
+        )
+        model.fc = classifier
+    else:
+        classifier = nn.Sequential(
+            nn.Linear(input_features[arch], hidden_units),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(hidden_units, 102),
+            nn.LogSoftmax(dim=1),
+        )
+        model.classifier = classifier
 
-    model.classifier = classifier
     return model
 
 
@@ -161,7 +192,12 @@ def main():
 
     # Define criterion and optimizer
     criterion = nn.NLLLoss()
-    optimizer = optim.Adam(model.classifier.parameters(), lr=args.learning_rate)
+
+    # Define optimizer with dynamic parameters based on architecture
+    if args.arch.startswith("resnet"):
+        optimizer = optim.Adam(model.fc.parameters(), lr=args.learning_rate)
+    else:
+        optimizer = optim.Adam(model.classifier.parameters(), lr=args.learning_rate)
 
     # Train model
     train_model(model, dataloaders, criterion, optimizer, args.epochs, device)
